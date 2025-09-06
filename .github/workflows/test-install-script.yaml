@@ -1,0 +1,86 @@
+name: Test Install Polish Dictionary
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      dict-date: ${{ steps.set-date.outputs.sjp_date }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up dependencies
+        run: sudo apt-get update && sudo apt-get install -y wget bzip2 postgresql-client
+
+      - name: Run build.sh
+        run: bash ./build.sh
+
+      - name: Upload dictionary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dict-files
+          path: |
+            polish.affix
+            polish.dict
+            polish.stop
+
+  test-install:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [13, 14, 15, 16, 17]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U testuser"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download dictionary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dict-files
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U testuser && break
+            sleep 2
+          done
+
+      - name: Create tsearch_data directory in PostgreSQL container and copy dictionary files
+        run: |
+          CONTAINER_ID=$(docker ps --filter "ancestor=postgres:${{ matrix.postgres-version }}" --format "{{.ID}}")
+          SHARED_DIR=$(docker exec $CONTAINER_ID bash -c "pg_config --sharedir")
+          docker exec $CONTAINER_ID mkdir -p $SHARED_DIR/tsearch_data
+          docker cp polish.affix $CONTAINER_ID:$SHARED_DIR/tsearch_data/polish.affix
+          docker cp polish.dict $CONTAINER_ID:$SHARED_DIR/tsearch_data/polish.dict
+          docker cp polish.stop $CONTAINER_ID:$SHARED_DIR/tsearch_data/polish.stop
+
+      - name: Install dictionary into PostgreSQL
+        env:
+          PGPASSWORD: testpass
+        run: |
+          ./install_polish_dict.sh testdb testuser localhost 5432

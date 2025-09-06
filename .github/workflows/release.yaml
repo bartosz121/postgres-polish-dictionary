@@ -1,0 +1,35 @@
+name: Polish Dictionary Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up dependencies
+        run: sudo apt-get update && sudo apt-get install -y wget bzip2
+
+      - name: Run build.sh
+        run: bash ./build.sh
+
+      - name: Ensure polish.stop exists
+        run: |
+          if [ ! -f polish.stop ]; then
+            echo "polish.stop not found! Please add it to the repository."
+            exit 1
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            polish.affix
+            polish.dict
+            polish.stop
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
